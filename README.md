@@ -1,4 +1,4 @@
-# Vision-and-Language-Navigation
+# Stop-Position-Ranker
 
 ## Overview
 This project aims to create a novel architecture and pipeline leveraging existing models to predict stop positions using [scene graphs](https://openaccess.thecvf.com/content_CVPR_2020/papers/Tang_Unbiased_Scene_Graph_Generation_From_Biased_Training_CVPR_2020_paper.pdf). Our approach focuses on enhancing decision-making around stop positions by introducing the ability to rank multiple candidates and provide justifications for not selecting certain positions.
