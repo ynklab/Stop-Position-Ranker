@@ -6,8 +6,8 @@ This project aims to create a novel architecture and pipeline leveraging existin
 ## Data Collection
 To address the limitations of the current [dataset](https://homes.cs.washington.edu/~ranjay/visualgenome/index.html), we are planning to augment the data with:
 
-- Multiple Stop Position Candidates: Collect data that includes various stop position options for each scene.
-- Ranking Annotations: Add annotations that rank the candidates based on appropriateness for stopping.
-- Non-Selection Reasons: Annotate why certain stop positions are not suitable.
+- Multiple Stop Position Candidates: Collect data that includes various stop position options for each scene
+- Ranking Annotations: Add annotations that rank the candidates based on appropriateness for stopping
+- Non-Selection Reasons: Annotate why certain stop positions are not suitable
 
 This enhanced dataset will enable our model to learn a more nuanced decision-making process, improving stop position prediction performance.
