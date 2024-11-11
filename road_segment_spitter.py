@@ -43,7 +43,7 @@ road_only = np.where(image_mask == 0, 1, 0)
 #finding 3 biggest clusters of pixels 
 lw, num = measurements.label(road_only)
 unique, counts = np.unique(lw, return_counts=True)
-ind = np.argpartition(-counts, kth=4)[:2]
+ind = np.argpartition(-counts, kth=4)[:4]
 road_after_filter = np.zeros(np.shape(lw))
 for cluster_id in unique[ind]:  
     if cluster_id != 0:
@@ -51,27 +51,22 @@ for cluster_id in unique[ind]:
 
 # Deviding the combined pixels into 6 different clusters based on distance from ego
 sizes = np.shape(lw)
-ego_coordinates = [sizes[0]/2, sizes[1]]
+ego_coordinates = [sizes[0], sizes[1]/2]
 clusters_after_filter = np.zeros(sizes)
 coordinate_farthest = -1
-for y in range(ego_coordinates[1]):
+for x in range(ego_coordinates[0]):
     if not coordinate_farthest != -1:
-        if np.sum(lw[:][y]) > 0:
-            coordinate_farthest = y
+        if np.sum(lw[x][:]) > 0:
+            coordinate_farthest = x
             break
-for y in range(coordinate_farthest,ego_coordinates[1]):
-    label_id = int(((y - coordinate_farthest)*3)/(ego_coordinates[1] - coordinate_farthest)) + 1
-    print(label_id)
-    for x in range(0,sizes[0]):
+for x in range(coordinate_farthest,ego_coordinates[0]):
+    label_id = int(((x - coordinate_farthest)*3)/(ego_coordinates[0] - coordinate_farthest)) + 1
+    for y in range(0,sizes[1]):
         if lw[x][y] == 1:
-            if x > ego_coordinates[0]:
+            if y > ego_coordinates[1]:
                 clusters_after_filter[x][y] = 2*label_id
             else:
                clusters_after_filter[x][y] = 2*label_id - 1 
-print(np.unique(clusters_after_filter))
-
-
-# print(np.size(img))
 
 colors = [(255,0,0), (0,255,0), (0,0,255), (255,255,0), (255,0,255), (0,255,255)]
 image_with_masks = np.copy(img)
