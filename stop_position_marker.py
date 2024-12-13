@@ -102,6 +102,8 @@ def check_remaining_space(edge_start, edge_end, box_corners, car_length_depth):
     # Return True if either space is large enough for another car
     return space_before > car_length_depth or space_after > car_length_depth
 
+
+###BUG### --> In some cases like in clip 8 frame 27 the car width is too big which leeds to an overlap
 def boxes_overlap(box1, box2, min_distance=1):
     """
     Check if two boxes overlap or are too close.
@@ -146,12 +148,203 @@ def scale_depth(depth_value, depth_min, depth_max, epsilon=1e-6):
     depth_value = np.clip(depth_value, depth_min + epsilon, depth_max - epsilon)
     return (depth_max - depth_value) / ((depth_max - depth_min) + epsilon)
 
+
+def set_markers(line_image, start_point, end_point, vx, vy, disp_resized_np, road_depth_values, previous_boxes, start_depth, end_depth, length_3d):
+    # Help Marker Green Edge
+    cv2.line(line_image, start_point, end_point, (0, 255, 0), 2)
+
+    angle = np.arctan2(vy, vx)  # Angle in radians
+    print(f"Angle: {angle}")
+
+    # Car size without depth
+    car_length = 450
+    car_width = 240
+
+    amount_cars = length_3d / 450
+
+
+    # Normalize the depth values
+    # depth_min = np.min(disp_resized_np)
+    # depth_max = np.max(disp_resized_np)
+    depth_min_road = np.min(road_depth_values)
+    depth_max_road = np.max(road_depth_values)
+    # Use percentiles to exclude outliers
+    # depth_min_road = np.percentile(road_depth_values, 1)  # Bottom 5%
+    # depth_max_road = np.percentile(road_depth_values, 99)  # Top 95%
+    # print(f"Depth Min: {depth_min}, Depth Max: {depth_max}")
+
+
+    start_depth_normalized = np.log1p(max(start_depth - depth_min_road, 0)) / np.log1p(
+        depth_max_road - depth_min_road)
+    end_depth_normalized = np.log1p(max(end_depth - depth_min_road, 0)) / np.log1p(depth_max_road - depth_min_road)
+
+    print(f"Road Depth Min: {depth_min_road}")
+    print(f"Road Depth Max: {depth_max_road}")
+    print(f"Start Depth: {start_depth}")
+    print(f"End Depth: {end_depth}")
+
+
+
+    # Scale all depth values in the road_depth_values array
+    scaled_depths = np.array([
+        scale_depth(value, depth_min_road, depth_max_road)
+        for value in road_depth_values
+    ])
+
+    # Scale start and end depths
+    start_depth_scaled = scale_depth(start_depth, depth_min_road, depth_max_road)
+    end_depth_scaled = scale_depth(end_depth, depth_min_road, depth_max_road)
+
+    print(f"Scaled Start Depth: {float(start_depth_scaled)}")
+    print(f"Scaled End Depth: {float(end_depth_scaled)}")
+
+    # start_depth_normalized = np.clip(start_depth_normalized, 0, 1)
+    # end_depth_normalized = np.clip(end_depth_normalized, 0, 1)
+    # mean_depth_normalized = (start_depth_normalized + end_depth_normalized) / 2
+    start_depth_normalized = start_depth_scaled
+    end_depth_normalized = end_depth_scaled
+
+    mean_depth_normalized = (start_depth_scaled + end_depth_scaled) / 2
+
+
+
+
+
+    print(f"start_depth_normalized: {start_depth_normalized}")
+    print(f"end_depth_normalized: {end_depth_normalized}")
+    print(f"mean_depth_normalized: {mean_depth_normalized}")
+
+    print(f"start_depth: {start_depth}")
+    print(f"end_depth: {end_depth}")
+
+
+    start_depth_scaled
+
+    car_length_depth = int(450 * mean_depth_normalized)
+    car_width_depth_mean = int(240 * mean_depth_normalized)
+    if car_width_depth_mean < 50:
+        car_width_depth_mean = 50
+    car_width_depth_start = int(240 * start_depth_normalized)
+    if car_width_depth_start < 50:
+        car_width_depth_start = 50
+    car_width_depth_end = int(240 * end_depth_normalized)
+    if car_width_depth_end < 50:
+        car_width_depth_end = 50
+
+    car_length_depth = int(450 * mean_depth_normalized)
+    car_width_depth = int(240 * mean_depth_normalized)
+
+    # Update car dimensions
+    car_length = int(car_length_depth)
+    car_width = int(car_width_depth)
+    # car_length = car_length_depth
+    deep_position = end_point[0]
+    deep_position_2 = start_point[0] + (car_length)*1.1
+    more_than_2_cars = False
+
+    corner_2 = (start_point[0] + car_length, start_point[1])
+    corner_3 = (start_point[0] + car_length, start_point[1] + car_width)
+    angle_active = True
+
+    # Top left 0,0 top right 0,1 bottom right 1,1 bottom left 1,0
+    overlap_found = False
+    if start_point[0] < end_point[0]:
+        if start_point[1] < end_point[1]:
+            # Top left
+            print('Top left')
+            corner_1 = (end_point[0], end_point[1] + car_width_depth_end) # bottom right
+            corner_2 = (start_point[0], start_point[1] + car_width_depth_start) # bottom left
+            corner_3 = (start_point[0], start_point[1]) # top left
+            corner_4 = (end_point[0], end_point[1] ) # top right
+
+            corners = [corner_1, corner_2, corner_3, corner_4]
+
+            if length_3d > (threshold*1.5) and angle_active:
+                corner_5 = (deep_position_2, start_point[1])
+                corner_6 = (deep_position_2, start_point[1] + (car_width_depth_mean)*0.8)
+                corner_5 = rotate_point(corner_5, start_point, angle)
+                corner_6 = rotate_point(corner_6, start_point, angle)
+                corners.append(corner_5)
+                corners.append(corner_6)
+                #corners = [rotate_point(corner, start_point, angle) for corner in corners]
+                more_than_2_cars = True
+
+
+
+    if start_point[0] < end_point[0]:
+        if start_point[1] > end_point[1]:
+            print('Top right')
+            more_than_2_cars = False
+            corner_1 = (end_point[0], end_point[1] + car_width_depth_end)  # bottom right
+            corner_2 = (start_point[0], start_point[1] + car_width_depth_start)  # bottom left
+            corner_3 = (start_point[0], start_point[1])  # top left
+            corner_4 = (end_point[0], end_point[1])  # top right
+
+            corners = [corner_1, corner_2, corner_3, corner_4]
+####BUG### --> the threshold value if not true as clip_7_frame_8 has a seperation line in the right marker
+            if length_3d > (threshold*1.5) and angle_active:
+                corner_5 = (deep_position_2, start_point[1])
+                corner_6 = (deep_position_2, start_point[1] + (car_width_depth_mean)*0.8)###BUG### --> the value (car_width_depth_mean)*0.8 is not good enough in some cases (clip_8_frame_27)
+
+                corner_5 = rotate_point(corner_5, start_point, angle)
+                corner_6 = rotate_point(corner_6, start_point, angle)
+                corners.append(corner_5)
+                corners.append(corner_6)
+                # Only rotate corner 5 and 6
+
+
+                more_than_2_cars = True
+
+
+
+
+
+
+
+
+    # Check against previous boxes
+
+    for i in range(0, len(previous_boxes), 4):  # Iterate over groups of 4 corners
+        prev_corners = previous_boxes[i:i + 4]
+
+        # Comment out after test
+        if overlap_found:
+            break
+
+        if boxes_overlap(corners, prev_corners):
+            overlap_found = True
+            break
+    # print(f"§$§$§${len(previous_boxes)}")
+
+    if not overlap_found:
+        # Rotate and draw the box if no overlap
+
+        for i in range(4):
+            cv2.line(line_image, corners[i], corners[(i + 1) % 4], (0, 0, 255), 2)
+        if more_than_2_cars and len(corners) > 4:
+            # for i in range(4, 6):
+            print(len(corners))
+            cv2.line(line_image, corners[4], corners[5], (0, 0, 255), 2)
+            print("More than 2 cars")
+
+
+
+        # Add the current box to the list of previous boxes
+        previous_boxes.extend(corners)
+    else:
+        print("Overlap detected. Adjust position or size.")
+
+
+threshold = 10
+
+
+
 def main():
     clip = 7
     frame = 8
-    image_mask = np.load(f'/home/anirudh/work_dir/Stop-Position-Ranker/Data/processed/clip_{clip}/{frame}.npy')
-    img = cv2.imread(f'/home/anirudh/work_dir/Stop-Position-Ranker/Data/dataset/annotation_image_action_without_bb/clip_{clip}/{frame}_without_bb.png')
-    path_to_depth = f"/home/anirudh/work_dir/Stop-Position-Ranker/Data/processed_depth/clip_{clip}/{frame}_without_bb_disp.npy"
+    image_mask = np.load(f'C:/Users/benru/PycharmProjects/Stop-position-ranker/Data/sample_data/processed/clip_{clip}/{frame}.npy')
+    img = cv2.imread(f'C:/Users/benru/PycharmProjects/Stop-position-ranker/Data/sample_data/dataset/annotation_image_action_without_bb/clip_{clip}/{frame}_without_bb.png')
+    path_to_depth = f"C:/Users/benru/PycharmProjects/Stop-position-ranker/Depth/processed_depth/clip_{clip}/{frame}_without_bb_disp.npy"
     disp_resized_np = np.load(path_to_depth).squeeze()
 
     previous_boxes = []
@@ -224,7 +417,8 @@ def main():
 
 
     for contour in contours:
-        if len(contour) < 10:  # Skip very small contours
+        if len(contour) < 500:  # Skip very small contours
+            print(f"Skipping small contour: {len(contour)}")
             continue
         # Fit a straight line to the entire contour
         [vx, vy, x, y] = cv2.fitLine(contour, cv2.DIST_L2, 0, 0.01, 0.01)
@@ -250,169 +444,26 @@ def main():
         start_depth = disp_resized_np[start_point[1], start_point[0]]
         end_depth = disp_resized_np[end_point[1], end_point[0]]
 
-        print(f"Start Point: {start_point}, End Point: {end_point}")
-        print(f"Start Depth: {start_depth}, End Depth: {end_depth}")
+        # Vector normalization for start and end depth euclidean distance
+        vx_start = start_point[0] / np.sqrt(start_point[0] ** 2 + start_point[1] ** 2)
+        vy_start = start_point[1] / np.sqrt(start_point[0] ** 2 + start_point[1] ** 2)
+        vx_end = end_point[0] / np.sqrt(end_point[0] ** 2 + end_point[1] ** 2)
+        vy_end = end_point[1]/ np.sqrt(end_point[0] ** 2 + end_point[1] ** 2)
 
-        # Compute the 3D distance
-        length_3d = np.sqrt(
-            (start_point[0] - end_point[0])**2 +
-            (start_point[1] - end_point[1])**2 +
-            (start_depth - end_depth)**2
-        )
+        length_3d = np.sqrt((start_depth * vx_start - end_depth * vx_end) ** 2 + (start_depth * vy_start - end_depth * vy_end) ** 2)
+        print(f"3D length of edge: {length_3d}")
 
 
-        # Draw the line
-        if length_3d > 350:
+
+        if length_3d > threshold:
             print(f"3D length of edge: {length_3d}")
-            cv2.line(line_image, start_point, end_point, (0, 255, 0), 2)
-
-            angle = np.arctan2(vy, vx)  # Angle in radians
-            print(f"Angle: {angle}")
-
-
-
-            # Car size without depth
-            car_length = 450
-            car_width = 240
-            # Draw the car along the line and rotate it to match the line orientation
-            #cv2.rectangle(line_image, start_point, end_point, (0, 0, 255), 2)
-            # Extract depth values for the start and end points
-            # start_depth = disp_resized_np[start_point[1], start_point[0]] * STEREO_SCALE_FACTOR
-            # end_depth = disp_resized_np[end_point[1], end_point[0]] * STEREO_SCALE_FACTOR
-
-            # Normalize the depth values
-            #depth_min = np.min(disp_resized_np)
-            #depth_max = np.max(disp_resized_np)
-            depth_min_road = np.min(road_depth_values)
-            depth_max_road = np.max(road_depth_values)
-            # Use percentiles to exclude outliers
-            #depth_min_road = np.percentile(road_depth_values, 1)  # Bottom 5%
-            #depth_max_road = np.percentile(road_depth_values, 99)  # Top 95%
-            #print(f"Depth Min: {depth_min}, Depth Max: {depth_max}")
-
-            #start_depth_normalized = (start_depth - depth_min_road) / (depth_max_road - depth_min_road)
-            #end_depth_normalized = (end_depth - depth_min_road) / (depth_max_road - depth_min_road)
-            #start_depth_normalized = np.log1p(start_depth - depth_min_road) / np.log1p(depth_max_road - depth_min_road)
-            #end_depth_normalized = np.log1p(end_depth - depth_min_road) / np.log1p(depth_max_road - depth_min_road)
-            start_depth_normalized = np.log1p(max(start_depth - depth_min_road, 0)) / np.log1p(depth_max_road - depth_min_road)
-            end_depth_normalized = np.log1p(max(end_depth - depth_min_road, 0)) / np.log1p(depth_max_road - depth_min_road)
-
-            print(f"Road Depth Min: {depth_min_road}")
-            print(f"Road Depth Max: {depth_max_road}")
-            print(f"Start Depth: {start_depth}")
-            print(f"End Depth: {end_depth}")
-
-
-            
-
-            # Scale all depth values in the road_depth_values array
-            scaled_depths = np.array([
-                scale_depth(value, depth_min_road, depth_max_road)
-                for value in road_depth_values
-            ])
-
-            # Scale start and end depths
-            start_depth_scaled = scale_depth(start_depth, depth_min_road, depth_max_road)
-            end_depth_scaled = scale_depth(end_depth, depth_min_road, depth_max_road)
-
-
-
-            print(f"Scaled Start Depth: {float(start_depth_scaled)}")
-            print(f"Scaled End Depth: {float(end_depth_scaled)}")
-
-
-            #start_depth_normalized = np.clip(start_depth_normalized, 0, 1)
-            #end_depth_normalized = np.clip(end_depth_normalized, 0, 1)
-            #mean_depth_normalized = (start_depth_normalized + end_depth_normalized) / 2
-            mean_depth_normalized = (start_depth_scaled + end_depth_scaled) / 2
-
-
-            #start_depth_normalized = (start_depth - disp_resized_np.min()) / (disp_resized_np.max() - disp_resized_np.min())
-            #end_depth_normalized = (end_depth - disp_resized_np.min()) / (disp_resized_np.max() - disp_resized_np.min())
-
-            print(f"start_depth_normalized: {start_depth_normalized}")
-            print(f"end_depth_normalized: {end_depth_normalized}")
-            print(f"mean_depth_normalized: {mean_depth_normalized}")
-
-
-            print(f"start_depth: {start_depth}")
-            print(f"end_depth: {end_depth}")
-
-
-            #Car size with depth
-            #if start_depth_normalized > 1:
-            # car_length_depth = 450/mean_depth_normalized
-            # car_width_depth = 240/mean_depth_normalized
-
-            # Adjust car dimensions
-            #scaling_factor = 20
-            #car_length_depth = int(450 * scaling_factor / mean_depth_normalized)
-            #car_width_depth = int(240 * scaling_factor / mean_depth_normalized)
-            car_length_depth = int(450 * mean_depth_normalized)
-            car_width_depth = int(240 * mean_depth_normalized)
-
-            # Update car dimensions
-            car_length = int(car_length_depth)
-            car_width = int(car_width_depth)
-
-            corner_1 = (start_point[0], start_point[1])
-            corner_2 = (start_point[0] + car_length, start_point[1])
-            corner_3 = (start_point[0] + car_length, start_point[1] + car_width)
-            corner_4 = (start_point[0], start_point[1] + car_width)
-            corners = [corner_1, corner_2, corner_3, corner_4]
-            corners = [rotate_point(corner, start_point, angle) for corner in corners]
-
-            # Check against previous boxes
-            overlap_found = False
-            for i in range(0, len(previous_boxes), 4):  # Iterate over groups of 4 corners
-                prev_corners = previous_boxes[i:i + 4]
-                if boxes_overlap(corners, prev_corners):
-                    overlap_found = True
-                    break
-            #print(f"§$§$§${len(previous_boxes)}")
-
-            if not overlap_found:
-                # Rotate and draw the box if no overlap
-                for i in range(4):
-                    cv2.line(line_image, corners[i], corners[(i + 1) % 4], (0, 0, 255), 2)
-
-                    # # Check remaining space
-                    # has_space = check_remaining_space(
-                    #     start_point,
-                    #     end_point,
-                    #     corners,
-                    #     car_length_depth
-                    # )
-
-                    # if has_space:
-                    #     print(f"Enough space remains for another car on this edge")
-                    #     # Process remaining contour
-                    #     remaining_start = corners[2]
-                    #     remaining_contour = np.array([
-                    #         [remaining_start],
-                    #         [end_point]
-                    #     ], dtype=np.int32)
-                    #     contours.append(remaining_contour)
-
-
-                # Add the current box to the list of previous boxes
-                previous_boxes.extend(corners)
-            else:
-                print("Overlap detected. Adjust position or size.")
-
-
-            #
-            # for i in range(4):
-            #     corners[i] = rotate_point(corners[i], start_point, angle)
-            # for i in range(4):
-            #     cv2.line(line_image, corners[i], corners[(i + 1) % 4], (0, 0, 255), 2)
-
-            # Draw the car along the line and rotate it to match the line orientation
-            #cv2.rectangle(line_image, start_point, end_point, (0, 0, 255), 2)
+            # Position Marker
+            set_markers(line_image, start_point, end_point, vx, vy, disp_resized_np, road_depth_values, previous_boxes, start_depth, end_depth, length_3d)
 
     edges_colored = np.zeros((edges.shape[0], edges.shape[1], 3), dtype=np.uint8)
 
     # Set detected edges to red (BGR format: Blue=0, Green=0, Red=255)
+    # Help Marker Red Edge
     edges_colored[edges != 0] = (0, 0, 255)
 
     combined_image = cv2.addWeighted(edges_colored, 0.8, line_image, 0.8, 0)
