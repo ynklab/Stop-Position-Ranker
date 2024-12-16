@@ -4,6 +4,7 @@ import scipy.ndimage as ndimage
 import cv2
 from typing import Tuple, List, Any
 import math
+from shapely.geometry import Polygon
 BoundingBox = Tuple[int, int, List[Tuple[int, int]]]
 colors = [
     (0,0,255),
@@ -193,6 +194,7 @@ class Scene():
         contours = list(contours)
         
         line_image = np.copy(img)
+        mask_stop_image = np.copy(img)
         boxes: List[BoundingBox] = []
         boxid = 0
         polygon_mask = np.zeros(road_only.shape)
@@ -326,14 +328,27 @@ class Scene():
             else: # cannot make more bounding boxes
                 print("Could not find 6 bounding boxes in this image")
                 break
+        # for box in boxes:
+        #     boxid, _, b = box
+        #     start_point, end_point, end_corner, start_corner = b
+        #     cv2.line(line_image, start_corner, end_corner, colors[boxid], 2)
+        #     cv2.line(line_image, start_corner, start_point, colors[boxid], 2)
+        #     cv2.line(line_image, end_point, end_corner, colors[boxid], 2)
+        #     cv2.line(line_image, start_point, end_point, colors[boxid], 2)
+
+        # visualization of stop position candidates
+        font = cv2.FONT_HERSHEY_SIMPLEX
         for box in boxes:
             boxid, _, b = box
-            start_point, end_point, end_corner, start_corner = b
-            cv2.line(line_image, start_corner, end_corner, colors[boxid], 2)
-            cv2.line(line_image, start_corner, start_point, colors[boxid], 2)
-            cv2.line(line_image, end_point, end_corner, colors[boxid], 2)
-            cv2.line(line_image, start_point, end_point, colors[boxid], 2)
-
-        return line_image, len(box)
+            polygon = Polygon(b)
+            int_coords = lambda x: np.array(x).round().astype(np.int32)
+            exterior = [int_coords(polygon.exterior.coords)]
+            # mask_stop_image = overlay(mask_stop_image, start_point, end_point, end_corner, start_corner, color=colors[boxid], alpha=0.3)
+            tmp_copy = np.copy(mask_stop_image)
+            cv2.fillPoly(tmp_copy, exterior, color=colors[boxid])
+            mask_stop_image = cv2.addWeighted(mask_stop_image, 0.6, tmp_copy, 0.4, 0)
+            center = polygon.centroid
+            mask_stop_image = cv2.putText(mask_stop_image,str(boxid+1),(int(center.x),int(center.y)), font, 0.5,(255,255,255),5,cv2.LINE_AA)
+        return mask_stop_image, len(box)
 
 
