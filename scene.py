@@ -22,7 +22,7 @@ class Scene():
         assert os.path.exists(img_path), "input image was not found"
         assert os.path.exists(depth_map_path), "depth map .npy file was not found"
         assert os.path.exists(mask_npy_path), "mask path not found"
-        self.__preprocess_image(img_path, depth_map_path, mask_npy_path)
+        self._img_path, self._depth_map_path, self._mask_npy_path = img_path, depth_map_path, mask_npy_path
 
     def __clamp_point(self, point: List[int], width: int, height: int) -> Tuple[int, int]:
         """
@@ -97,11 +97,6 @@ class Scene():
                 keep_expanding = False
         return px, py
     
-    def __bounded(self, point: Tuple[int, int], minimum: Tuple[int, int], maximum: Tuple[int, int]) -> Tuple[int, int]:
-        x, y = point
-        x = max(minimum[0], min(x, maximum[0]))
-        y = max(minimum[1], min(y, maximum[1]))
-        return int(x), int(y)
 
     def __find_first(self, starting_point: Tuple[int, int], limit: Tuple[int, int], orientation: float, mask: np.ndarray) -> Tuple[int, int]:
         """
@@ -149,16 +144,16 @@ class Scene():
         return (depth_max - depth_value) / ((depth_max - depth_min) + epsilon)
 
 
-    def __preprocess_image(self, image: str, depth_map: str, mask_npy: str) -> List[BoundingBox]:
+    def process_image(self) -> np.ndarray:
         """
         Returns a list of bounding boxes b.
         Each bounding box is a list of 4 tuples t, where t = Tuple[int, int]
         """
         # we should have asserts to validate that given str is os.path
         #### DATA LOADING
-        img = cv2.imread(image)
-        img_mask = np.load(mask_npy)
-        depth = np.load(depth_map, allow_pickle=True).squeeze()
+        img = cv2.imread(self._img_path)
+        img_mask = np.load(self._mask_npy_path)
+        depth = np.load(self._depth_map_path, allow_pickle=True).squeeze()
         height, width = img.shape[0], img.shape[1]
 
         ##### DEPTH MAPPING OF ROAD ONLY
@@ -169,11 +164,15 @@ class Scene():
         lw, _ = ndimage.label(road_only)
         unique, counts = np.unique(lw, return_counts=True)
         # assumes that background is always the biggest cluster
-        ind = np.argpartition(-counts, kth=4)[:4]
-        biggest_clusters_index = list(unique[ind])
-        # index 0 is background
-        if 0 in biggest_clusters_index:
-            biggest_clusters_index.remove(0)
+        if len(counts) > 4:
+            ind = np.argpartition(-counts, kth=4)[:4]
+            biggest_clusters_index = list(unique[ind])
+
+            # index 0 is background
+            if 0 in biggest_clusters_index:
+                biggest_clusters_index.remove(0)
+        else:
+            biggest_clusters_index = unique[1:]
         road_after_filter = np.array([[lw[y, x] in biggest_clusters_index for x in range(width)] for y in range(height)])
         
         # Extract depth values only for road pixels
@@ -231,7 +230,7 @@ class Scene():
                 if end_point[0] == -1:
                     continue
 
-            cv2.line(line_image, start_point, end_point, (0,255,0), 4)
+            #cv2.line(line_image, start_point, end_point, (0,255,0), 4)
 
             # euclidian distance, pixelwise
             pixel_length = math.sqrt(((end_point[0] - start_point[0])**2) + ((end_point[1] - end_point[1]) ** 2)) 
@@ -269,8 +268,6 @@ class Scene():
                     px, py = end_corner[0] + scaled_car_width_start, end_corner[1]
                     end_point = self.__rotate_point((px, py), end_corner, correct_angle)
                     end_corners[index] = end_corner
-                    print(f"SUCCESS {end_corner}")
-
                 elif end_corner == 0:
                     angle = math.pi + (orientation)
                     angle %= (2*math.pi)
@@ -303,6 +300,8 @@ class Scene():
                 road_only = np.where((road_only == 1) & (polygon_mask == 0), 1, 0)
                 
                 boxid += 1
+        if len(boxes) == 0:
+            return line_image, 0
         while len(boxes) > 6:
             boxes.pop()
         while len(boxes) < 6:
@@ -335,30 +334,6 @@ class Scene():
             cv2.line(line_image, end_point, end_corner, colors[boxid], 2)
             cv2.line(line_image, start_point, end_point, colors[boxid], 2)
 
-
-
-
-        cv2.imwrite("pol.png", polygon_mask * 255)
-        cv2.imwrite("img0.png", line_image)
-        assert 0
-        edges_colored = np.zeros((edges.shape[0], edges.shape[1], 3), dtype=np.uint8)
-
-        # Set detected edges to red (BGR format: Blue=0, Green=0, Red=255)
-        # Help Marker Red Edge
-        edges_colored[edges != 0] = (0, 0, 255)
-
-        combined_image = cv2.addWeighted(edges_colored, 0.8, line_image, 0.8, 0)
-
-
-        image_with_outlines_and_lines = cv2.addWeighted(img, 0.8, combined_image, 0.8, 0)
-
-        # Save or display the resulting image
-        output_path = f'edges_aligned_with_longest_straight_part_clip_{clip}_frame_{frame}.png'
-        cv2.imwrite(output_path, image_with_outlines_and_lines)
-        print(f"###NEW PICTURE {output_path}######")
-
-
-        previous_boxes = []
-
+        return line_image, len(box)
 
 

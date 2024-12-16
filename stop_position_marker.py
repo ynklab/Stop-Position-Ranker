@@ -336,10 +336,46 @@ threshold = 10
 
 
 if __name__ == "__main__": 
-    
-    clip = 7
-    frame = 8
-    scene = Scene(f'./dataset/sample_data/dataset/annotation_image_action_without_bb/clip_{clip}/{frame}_without_bb.png',
-                         f'./dataset/processed_depth/clip_{clip}/{frame}_without_bb_disp.npy',
-                         f'./dataset/sample_data/processed/clip_{clip}/{frame}.npy'
-                         )
+    import argparse
+    import re
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='makes simple stop position prediction')
+    parser.add_argument('--dataset', required=True,
+                        metavar="/path/to/balloon/dataset/",
+                        help='Directory of the original images dataset')
+    parser.add_argument('--depth', required=True,
+                        metavar="/path/to/depth/dataset/",
+                        help="Path to depth dataset. Same tree-like structure as --dataset expected")
+    parser.add_argument('--segmentation', required=True,
+                        metavar="/path/to/segmentic/dataset",
+                        help='Path to depth dataset. Same tree-like structure as --dataset expected')
+    parser.add_argument("--list", required=True,
+                        metavar="input .txt file")
+    parser.add_argument("--output", required=False)
+    args = parser.parse_args()
+
+    images = args.dataset
+    depths = args.depth
+    seg = args.segmentation
+    output_folder = args.output
+    f = open(args.list, 'r')
+    num_boxes = [0 for _ in range(6)]
+    for line in f:
+        lclip = line.split("clip_")[1].split(".mp4")[0]
+        clip, frame = lclip.split("/")
+        try:
+            os.mkdir(os.path.join(output_folder, f"clip_{clip}"))
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        image = os.path.join(images, f"clip_{clip}/{frame}_without_bb.png")
+        depth = os.path.join(depths, f"clip_{clip}/{frame}_without_bb_disp.npy")
+        segmentation = os.path.join(seg, f"clip_{clip}/semantic_inference/{frame}_semantic.npy")
+        scene = Scene(image, depth, segmentation)
+        image, num = scene.process_image()
+        num_boxes[num] += 1
+        cv2.imwrite(os.path.join(output_folder, f"clip_{clip}/{frame}.png"), image)
+    f2 = open(os.path.join(args.output, "logs.txt"), 'w')
+    f2.write(' '.join(num_boxes))
+    f2.close()
