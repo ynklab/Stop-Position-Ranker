@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.ndimage import measurements
+import scipy.ndimage as ndimage
 import cv2
 import os
 import numpy as np
@@ -9,6 +9,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 import matplotlib as mpl
 from matplotlib import pyplot as plt
 import matplotlib.cm as cm
+from scene import Scene
 
 
 def overlay(image, mask, color, alpha, resize=None):
@@ -61,12 +62,6 @@ def rotate_point(param, start_point, angle):
     x_rot = x0 + np.cos(angle) * (x - x0) - np.sin(angle) * (y - y0)
     y_rot = y0 + np.sin(angle) * (x - x0) + np.cos(angle) * (y - y0)
     return int(x_rot), int(y_rot)
-
-def clamp_point(point, width, height):
-    x, y = point
-    x = max(0, min(x, width - 1))
-    y = max(0, min(y, height - 1))
-    return int(x), int(y)
 
 def check_remaining_space(edge_start, edge_end, box_corners, car_length_depth):
     """
@@ -337,144 +332,14 @@ def set_markers(line_image, start_point, end_point, vx, vy, disp_resized_np, roa
 
 threshold = 10
 
+# return a Scene object with useful methods and image-dependant values
 
-
-def main():
-    clip = 7
-    frame = 8
-    image_mask = np.load(f'C:/Users/benru/PycharmProjects/Stop-position-ranker/Data/sample_data/processed/clip_{clip}/{frame}.npy')
-    img = cv2.imread(f'C:/Users/benru/PycharmProjects/Stop-position-ranker/Data/sample_data/dataset/annotation_image_action_without_bb/clip_{clip}/{frame}_without_bb.png')
-    path_to_depth = f"C:/Users/benru/PycharmProjects/Stop-position-ranker/Depth/processed_depth/clip_{clip}/{frame}_without_bb_disp.npy"
-    disp_resized_np = np.load(path_to_depth).squeeze()
-
-    previous_boxes = []
-    # select pixels with label class as road
-    road_only = np.where(image_mask == 0, 1, 0)
-
-    #finding 3 biggest clusters of pixels
-    lw, num = measurements.label(road_only)
-    unique, counts = np.unique(lw, return_counts=True)
-    ind = np.argpartition(-counts, kth=4)[:4]
-    road_after_filter = np.zeros(np.shape(lw))
-    for cluster_id in unique[ind]:
-        if cluster_id != 0:
-            road_after_filter = np.where(lw == cluster_id, 1, 0)
-    ## visualize the depth if necessary
-    # visualize_depth(disp_resized_np)
-
-    STEREO_SCALE_FACTOR = 1
-
-    #lw = analyze_space(road_mask=road_after_filter, depth_map=path_to_depth)
-
-    # read the npy file and print the values
-    # Extract depth values only for road pixels
-    road_depth_mask = (road_after_filter > 0)  # Assuming road pixels are marked as 1
-    road_depth_values = disp_resized_np[road_depth_mask]
-
-    # print(f"Depth values: {depth_values}")
-    # print(f"min value: {np.min(depth_values)}")
-    # print(f"road min value: {np.min(road_depth_values)}")
-    # print(f"max value: {np.max(depth_values)}")
-    # print(f"road max value: {np.max(road_depth_values)}")
-    # print(f"mean value: {np.mean(depth_values)}")
-    # print(f"road mean value: {np.mean(road_depth_values)}")
-
-    road_and_edge = np.where(image_mask == 0, 1, 0)
-
-    image_with_masks = np.copy(img)
-    road_pixels = np.where(image_mask == 0)  # Find coordinates where value is 0 (assuming 0 represents 'road')
-    border_points = np.where(image_mask == 1)  # Assuming 1 represents 'border_points'
-
-
-
-    for x, y in zip(*road_pixels):
-        image_with_masks = cv2.circle(image_with_masks, (y, x), 1, (0, 255, 0), -1)
-
-    for x, y in zip(*border_points):
-        image_with_masks = cv2.circle(image_with_masks, (y, x), 1, (255, 0, 0), -1)
-    #make a copy of the image
-    #image = np.copy(img)
-
-    # Assuming `image_mask` is loaded, where 1 represents border points
-    border_points_mask = np.where(image_mask == 1, 255, 0).astype(np.uint8)
-
-    # Apply edge detection using Canny
-    edges = cv2.Canny(border_points_mask, threshold1=100, threshold2=200)
-
-    # Find contours (edge points)
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-
-
-    contours = list(contours)
-
-    # Create a blank image for the lines
-    line_image = np.zeros_like(img)
-
-
-    height, width = disp_resized_np.shape  # Get array dimensions
-
-    # Clamp function to ensure points stay within bounds
-
-
-    for contour in contours:
-        if len(contour) < 500:  # Skip very small contours
-            print(f"Skipping small contour: {len(contour)}")
-            continue
-        # Fit a straight line to the entire contour
-        [vx, vy, x, y] = cv2.fitLine(contour, cv2.DIST_L2, 0, 0.01, 0.01)
-
-        # Project contour points onto the line
-        projections = []
-        for point in contour:
-            px, py = point[0]
-            # Parametric projection of the point onto the line
-            t = vx * (px - x) + vy * (py - y)
-            projections.append([x + t * vx, y + t * vy])
-        projections = np.array(projections)
-
-        # Find the extreme points along the line
-        min_t_idx = np.argmin(projections[:, 0] * vx + projections[:, 1] * vy)
-        max_t_idx = np.argmax(projections[:, 0] * vx + projections[:, 1] * vy)
-
-        # Convert to integer and clamp within bounds
-        start_point = clamp_point(projections[min_t_idx], width, height)
-        end_point = clamp_point(projections[max_t_idx], width, height)
-
-        # Access depth values at valid indices
-        start_depth = disp_resized_np[start_point[1], start_point[0]]
-        end_depth = disp_resized_np[end_point[1], end_point[0]]
-
-        # Vector normalization for start and end depth euclidean distance
-        vx_start = start_point[0] / np.sqrt(start_point[0] ** 2 + start_point[1] ** 2)
-        vy_start = start_point[1] / np.sqrt(start_point[0] ** 2 + start_point[1] ** 2)
-        vx_end = end_point[0] / np.sqrt(end_point[0] ** 2 + end_point[1] ** 2)
-        vy_end = end_point[1]/ np.sqrt(end_point[0] ** 2 + end_point[1] ** 2)
-
-        length_3d = np.sqrt((start_depth * vx_start - end_depth * vx_end) ** 2 + (start_depth * vy_start - end_depth * vy_end) ** 2)
-        print(f"3D length of edge: {length_3d}")
-
-
-
-        if length_3d > threshold:
-            print(f"3D length of edge: {length_3d}")
-            # Position Marker
-            set_markers(line_image, start_point, end_point, vx, vy, disp_resized_np, road_depth_values, previous_boxes, start_depth, end_depth, length_3d)
-
-    edges_colored = np.zeros((edges.shape[0], edges.shape[1], 3), dtype=np.uint8)
-
-    # Set detected edges to red (BGR format: Blue=0, Green=0, Red=255)
-    # Help Marker Red Edge
-    edges_colored[edges != 0] = (0, 0, 255)
-
-    combined_image = cv2.addWeighted(edges_colored, 0.8, line_image, 0.8, 0)
-
-
-    image_with_outlines_and_lines = cv2.addWeighted(img, 0.8, combined_image, 0.8, 0)
-
-    # Save or display the resulting image
-    output_path = f'edges_aligned_with_longest_straight_part_clip_{clip}_frame_{frame}.png'
-    cv2.imwrite(output_path, image_with_outlines_and_lines)
-    print(f"###NEW PICTURE {output_path}######")
 
 if __name__ == "__main__": 
-    main() 
+    
+    clip = 7
+    frame = 8
+    scene = Scene(f'./dataset/sample_data/dataset/annotation_image_action_without_bb/clip_{clip}/{frame}_without_bb.png',
+                         f'./dataset/processed_depth/clip_{clip}/{frame}_without_bb_disp.npy',
+                         f'./dataset/sample_data/processed/clip_{clip}/{frame}.npy'
+                         )
