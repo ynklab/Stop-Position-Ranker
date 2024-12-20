@@ -361,7 +361,7 @@ if __name__ == "__main__":
     seg = args.segmentation
     output_folder = args.output
     f = open(args.list, 'r')
-    num_boxes = [0 for _ in range(6)]
+    num_boxes = [0 for _ in range(7)]
     for line in f:
         lclip = line.split("clip_")[1].split(".mp4")[0]
         clip, frame = lclip.split("/")
@@ -377,5 +377,5 @@ if __name__ == "__main__":
         num_boxes[num] += 1
         cv2.imwrite(os.path.join(output_folder, f"clip_{clip}/{frame}.png"), image)
     f2 = open(os.path.join(args.output, "logs.txt"), 'w')
-    f2.write(' '.join(num_boxes))
+    f2.write(str(num_boxes))
     f2.close()

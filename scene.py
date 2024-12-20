@@ -17,7 +17,7 @@ colors = [
 
 class Scene():
     _car_length = 250
-    _car_width = 160
+    _car_width = 200
 
     def __init__(self, img_path: str, depth_map_path: str, mask_npy_path: str):
         assert os.path.exists(img_path), "input image was not found"
@@ -76,7 +76,7 @@ class Scene():
             result[1] = (qx, qy)
         return result
     
-    def __explore(self, starting_point: Tuple[int, int], orientation: float, mask: np.ndarray) -> Tuple[int, int]:
+    def __explore(self, starting_point: Tuple[int, int], orientation: float, mask: np.ndarray, length: int) -> Tuple[int, int]:
         """
         Returns the point which 
         1. is the farthest from starting point
@@ -89,7 +89,10 @@ class Scene():
         px, py = starting_point 
         while keep_expanding:
             iteration += 1
-            qx, qy = starting_point[0] + (factor * iteration), starting_point[1]
+            l = factor * iteration
+            if l > length:
+                keep_expanding = False
+            qx, qy = starting_point[0] + l, starting_point[1]
             qx, qy = self.__rotate_point((qx, qy), starting_point, orientation)
             is_clamped = all([i == j for i, j in zip((qx, qy), self.__clamp_point((qx, qy), mask.shape[1], mask.shape[0]))])
             if is_clamped and mask[qy, qx] == 1:
@@ -127,7 +130,6 @@ class Scene():
 
     def __all_outside(self, starting_point: Tuple[int, int], limit: Tuple[int, int], mask: np.ndarray) -> bool:
         """
-        These 3 methods should be unified, with a boolean condition as a parameter. Until then:
         checks if all points between starting_point and limit are outside the given mask.
         """
         m = np.zeros(mask.shape)
@@ -144,6 +146,10 @@ class Scene():
         depth_value = np.clip(depth_value, depth_min + epsilon, depth_max - epsilon)
         return (depth_max - depth_value) / ((depth_max - depth_min) + epsilon)
 
+    def __center_square(self, p1: Tuple[int, int], p2: Tuple[int, int]) -> Tuple[int, int]:
+        deltax = (p1[0] - p2[0])/2
+        deltay = (p1[1] - p2[1])/2
+        return p1[0] + deltax, p1[0] + deltay
 
     def process_image(self) -> np.ndarray:
         """
@@ -157,13 +163,16 @@ class Scene():
         depth = np.load(self._depth_map_path, allow_pickle=True).squeeze()
         height, width = img.shape[0], img.shape[1]
 
-        ##### DEPTH MAPPING OF ROAD ONLY
-        # select pixels with label class as road
-        road_only = np.where(img_mask == 0, 1, 0)
-
+        # curb/terrain == 2/9; road == 13; sidewalk == 15; pedestrians == 19; crosswalks == 23; lane markings == 24, potholes == 41
+        # select pixels with label class == e with e in {road, sidewalk, pedestrian, lane markings, crosswalk} as road
+        # we consider pedestrians as road because they might move.
+        road_only = np.where((img_mask == 13) | (img_mask == 15) | (img_mask == 23) | (img_mask == 24) | (img_mask == 41), 1, 0)
         # finding 3 biggest clusters of pixels
         lw, _ = ndimage.label(road_only)
         unique, counts = np.unique(lw, return_counts=True)
+
+        is_bounded = lambda x: lambda l: lambda r: l[0] <= x[0] and x[0] <= r[0] and l[1] <= x[1] and x[1] <= r[1]
+
         # assumes that background is always the biggest cluster
         if len(counts) > 4:
             ind = np.argpartition(-counts, kth=4)[:4]
@@ -175,137 +184,127 @@ class Scene():
         else:
             biggest_clusters_index = unique[1:]
         road_after_filter = np.array([[lw[y, x] in biggest_clusters_index for x in range(width)] for y in range(height)])
-        
+    
         # Extract depth values only for road pixels
         road_depth_values = np.where(road_after_filter, depth, 0)
         mindepth = np.min(road_depth_values[np.nonzero(road_depth_values)])
         maxdepth = np.max(road_depth_values)
-        #road_mask = np.where(road_after_filter)
-
+        
         #### EDGE DETECTION
-        border_points_mask = np.where(img_mask == 1, 255, 0).astype(np.uint8)
-
-
+        # borders are: lane markings, curb, terrain, crosswalk, sidewalk, truck, car, other vehicle
+        border_points_mask = np.where((img_mask == 2) | (img_mask == 9) | (img_mask == 15) | (img_mask == 23) | (img_mask == 24) | (img_mask == 55)| (img_mask == 59) | (img_mask == 61), 255, 0).astype(np.uint8)
+        cv2.imwrite("imgmask.png", border_points_mask)
         # Apply edge detection using Canny
         edges = cv2.Canny(border_points_mask, threshold1=100, threshold2=200)
 
-        # Find contours (edge points)
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        contours = list(contours)
-        
-        line_image = np.copy(img)
+        rho = 1  # distance resolution in pixels of the Hough grid
+        theta = np.pi / 180  # angular resolution in radians of the Hough grid
+        threshold = 25  # minimum number of votes (intersections in Hough grid cell)
+        min_line_length = 70  # minimum number of pixels making up a line
+        max_line_gap = 40.0  # maximum gap in pixels between connectable line segments
+        line_image = np.copy(img) * 0  # creating a blank to draw lines on
         mask_stop_image = np.copy(img)
+
+
+        lines = cv2.HoughLinesP(edges, rho, theta, threshold, np.array([]), min_line_length, max_line_gap)
+        lines = sorted(list(lines), key=lambda x: x[0][0])
         boxes: List[BoundingBox] = []
         boxid = 0
         polygon_mask = np.zeros(road_only.shape)
-        for contour in contours:
-            if len(contour) < 500:  # Skip very small contours
-                continue
-            # Fit a straight line to the entire contour
-            [vx, vy, x, y] = cv2.fitLine(contour, cv2.DIST_L2, 0, 0.01, 0.01)
+        
+        for line in lines:
+            for x1,y1,x2,y2 in line:
+                cv2.line(line_image, (x1, y1), (x2, y2), (0,255,0), 4)
+                number_of_points = max(abs(x1 - x2), abs(y1 - y2))
+                xs = np.linspace(x1, x2, number_of_points)
+                ys = np.linspace(y1, y2, number_of_points)
+                vector = [x2 - x1, y2 - y1]
+                orientation = np.arctan2(vector[1], vector[0])
+                left_point = (-1, -1)
+                right_point = (-1, -1)
+                for x, y in zip(xs, ys):
+                    point = (x,y)
+                    if left_point[0] == -1 or not(is_bounded(point)(left_point)(right_point)):
+                        clamped = self.__clamp_point(point, width, height)
+                        if polygon_mask[clamped[1], clamped[0]] == 1:
+                            continue
+                        depth_p = depth[clamped[1], clamped[0]]
+                        percentage_p = self.__scale_depth(depth_p, mindepth, maxdepth)
+                        
+                        scaled_car_width_p = int(self._car_width * percentage_p * 0.9)
+                        p_corners = self.__orient_point(clamped, orientation, scaled_car_width_p, road_only)
+                        p2_corners = [[-1, -1], [-1, -1]]
+                        p2s = [[-1, -1], [-1, -1]]
+                        car_ratios = [0,0]
+                        index = -1
+                        for p_corner in p_corners:
+                            index += 1
+                            if p_corner[0] == -1:
+                                continue
+                            vector = [clamped[0] - p_corner[0], clamped[1] - p_corner[1]]
+                            width_angle = np.arctan2(vector[1], vector[0])
+                            exploration_length = self._car_length * percentage_p * 2.1
+                            p2_corner = self.__explore(p_corner, orientation, road_only, exploration_length) 
 
-            # Project contour points onto the line
-            projections = []
-            for point in contour:
-                px, py = point[0]
-                # Parametric projection of the point onto the line
-                t = vx * (px - x) + vy * (py - y)
-                projections.append([x + t * vx, y + t * vy])
-            projections = np.array(projections)
+                            p2x, p2y = p2_corner[0] + scaled_car_width_p, p2_corner[1]
+                            p2 = self.__rotate_point((p2x, p2y), p2_corner, width_angle)
+                            clamped_p2 = self.__clamp_point(p2, width, height)
+                            if clamped_p2[0] != p2[0] or clamped_p2[1] != p2[1]:
+                                continue
+                            
+                            depth_p2 = depth[p2[1], p2[0]]
+                            percentage_p2 = self.__scale_depth(depth_p2, mindepth, maxdepth)
 
-            # Find the extreme points along the line
-            min_t_idx = np.argmin(projections[:, 0] * vx + projections[:, 1] * vy)
-            max_t_idx = np.argmax(projections[:, 0] * vx + projections[:, 1] * vy)
+                            left_point = (min(clamped[0], p2[0]), min(clamped[1], p2[1]))
+                            right_point = (max(clamped[0], p2[0]), max(p2[1], p2[1]))
+                            
+                            pixel_length = math.sqrt(((clamped[0] - p2[0])**2) + ((clamped[1] - p2[1])**2))
+                            scaled_car_length = int(self._car_length * ((percentage_p+percentage_p2)/2))
+                            if pixel_length < scaled_car_length or scaled_car_length < 50:
+                                continue
+                            # found correct points. Store all values
+                            car_ratios[index] = pixel_length / scaled_car_length
+                            p2_corners[index] = p2_corner
+                            p2s[index] = p2
 
-            # line orientation
-            orientation = np.arctan2(vy, vx)
-            orientation %= (math.pi*2)
-            # Convert to integer and clamp within bounds
-            start_point = self.__clamp_point(projections[min_t_idx], width, height)
-            end_point = self.__clamp_point(projections[max_t_idx], width, height)
-            if polygon_mask[start_point[1], start_point[0]]:
-                start_point = self.__find_first(start_point, end_point, math.pi - orientation, polygon_mask )
-                if start_point[0] == -1:
-                    continue
-            if polygon_mask[end_point[1], end_point[0]]:
-                end_point = self.__find_first(end_point, start_point, orientation, polygon_mask )
-                if end_point[0] == -1:
-                    continue
-
-            #cv2.line(line_image, start_point, end_point, (0,255,0), 4)
-
-            # euclidian distance, pixelwise
-            pixel_length = math.sqrt(((end_point[0] - start_point[0])**2) + ((end_point[1] - end_point[1]) ** 2)) 
-
-            # Access depth values at valid indices
-            start_depth = depth[start_point[1], start_point[0]]
-            end_depth = depth[end_point[1], end_point[0]]
-
-            percentage_start = self.__scale_depth(start_depth, mindepth, maxdepth*1.2)
-            percentage_end = self.__scale_depth(end_depth, mindepth, maxdepth*1.2)
-            scaled_car_length = int(self._car_length * ((percentage_start+percentage_end)/2))
-            if pixel_length < scaled_car_length:
-                continue 
-            scaled_car_width_start = int(self._car_width * percentage_start * 0.9)
-            scaled_car_width_end = int(self._car_width * percentage_end * 0.9)
-
-            start_corners = self.__orient_point(start_point, orientation, scaled_car_width_start, road_only)
-            end_corners = self.__orient_point(end_point, orientation, scaled_car_width_end, road_only)
-            index = -1
-            for start_corner, end_corner in zip(start_corners, end_corners):
-                index += 1 
-                if start_corner[0] == -1 and end_corner[0] == -1:
-                    continue # neither points are on the road
-                elif end_corner[0] == -1: # end corner not on the road
-                    # try to find minimal bb
-                    points = self.__orient_point(start_corner, orientation, scaled_car_length, road_only, True)
-                    qx, qy = points[0]
-                    if qx == -1:
-                        continue
-                    # minimal bounding box can be on the road. Explore to expand it
-                    end_corner = self.__explore((qx, qy), orientation, road_only)
-                    vector = [start_point[0] - start_corner[0], start_point[1] - start_corner[1]]
-                    correct_angle = np.arctan2(vector[1], vector[0])
-                    # find the accurate end_point
-                    px, py = end_corner[0] + scaled_car_width_start, end_corner[1]
-                    end_point = self.__rotate_point((px, py), end_corner, correct_angle)
-                    end_corners[index] = end_corner
-                elif end_corner == 0:
-                    angle = math.pi + (orientation)
-                    angle %= (2*math.pi)
-                    points = self.__orient_point(end_corner, angle, scaled_car_length, road_only, True)
-                    qx, qy = points[0]
-                    if qx == -1:
-                        continue
-                    start_corner = self.__explore((qx, qy), math.pi - orientation, road_only)
-                    vector = [end_point[0] - end_corner[0], end_point[1] - end_corner[1]]
-                    correct_angle = np.arctan2(vector[1], vector[0])
-                    # find the accurate start_point
-                    px, py = start_corner[0] + scaled_car_width_end, start_corner[1]
-                    start_point = self.__rotate_point((px, py), start_corner, correct_angle)
-                    start_corners[index] = start_corner
-
-            for start_corner, end_corner in zip(start_corners, end_corners):
-                if start_corner[0] == -1 or end_corner[0] == -1:
-                    continue
-                # found a spot here, check if overlap
-                has_no_overlap = self.__all_outside(start_corner, end_corner, polygon_mask)
-                if not has_no_overlap:
-                    continue
-            
-                vertices = [start_point, end_point, end_corner, start_corner]
-                car_ratio = pixel_length / scaled_car_length
-                b: BoundingBox = (boxid, car_ratio, vertices)
-                boxes.append(b)
-                cv2.fillConvexPoly(polygon_mask, np.array(vertices), 1)
-                # all time is lost here
-                road_only = np.where((road_only == 1) & (polygon_mask == 0), 1, 0)
-                
-                boxid += 1
+                        for corner, corner_2, point_2, car_ratio in zip(p_corners, p2_corners, p2s, car_ratios):
+                            if corner[0] == -1 or corner_2[0] == -1:
+                                continue
+                            # found a spot, check if width overlap
+                            has_no_overlap = self.__all_outside(corner, corner_2, polygon_mask)
+                            has_no_overlap_2 = self.__all_outside(clamped, corner, polygon_mask)
+                            has_no_overlap_3 = self.__all_outside(clamped, point_2, polygon_mask)
+                            has_no_overlap_4 = self.__all_outside(point_2, corner_2, polygon_mask)
+                            
+                            if not(has_no_overlap) or not(has_no_overlap_2) or not(has_no_overlap_3) or not(has_no_overlap_4):
+                                continue
+                            
+                            vertices = vertices = [clamped, point_2, corner_2, corner]
+                            b: BoundingBox = (boxid, car_ratio, vertices)
+                            boxes.append(b)
+                            cv2.fillConvexPoly(polygon_mask, np.array(vertices), 1)
+                            road_only = np.where((road_only == 1) & (polygon_mask == 0), 1, 0)
+                            boxid += 1
+        
+        cv2.imwrite("img0.png", line_image)
+        cv2.imwrite("masks.png", polygon_mask * 255)
+        cv2.imwrite("road.png", road_only * 255)
         if len(boxes) == 0:
             return line_image, 0
-        while len(boxes) > 6:
-            boxes.pop()
+        if len(boxes) > 6:
+            centers = [(id, self.__center_square(b[0], b[1]), cr) for id, cr, b in boxes]
+            center_dist = [(id, sum([math.sqrt(((c[0] - c2[0])**2) + ((c[1] - c2[1])**2)) for _, c2, _ in centers]), cr) for id, c, cr in centers]
+            center_dist.sort(key=lambda x: x[1] * (x[2] * .75), reverse=True)
+            to_be_removed = [id for id,_, _ in center_dist[6:]]
+            bb = []
+            for id, ratio, b in boxes:
+                if id in to_be_removed:
+                    continue
+                bb.append((id, ratio, b))
+            boxes = bb
+
+
+
         while len(boxes) < 6:
             big_id, car_ratio, biggest = boxes[0]
             start_point, end_point, end_corner, start_corner = biggest
@@ -326,29 +325,23 @@ class Scene():
                 boxes[big_id] = (big_id, car_ratio/2, [(middle_point_x, middle_point_y), end_point, end_corner, (middle_corner_x, middle_corner_y)])
                 boxes.append((len(boxes), car_ratio/2, [start_point, (middle_point_x, middle_point_y), (middle_corner_x, middle_corner_y), start_corner]))
             else: # cannot make more bounding boxes
-                print("Could not find 6 bounding boxes in this image")
                 break
-        # for box in boxes:
-        #     boxid, _, b = box
-        #     start_point, end_point, end_corner, start_corner = b
-        #     cv2.line(line_image, start_corner, end_corner, colors[boxid], 2)
-        #     cv2.line(line_image, start_corner, start_point, colors[boxid], 2)
-        #     cv2.line(line_image, end_point, end_corner, colors[boxid], 2)
-        #     cv2.line(line_image, start_point, end_point, colors[boxid], 2)
 
         # visualization of stop position candidates
         font = cv2.FONT_HERSHEY_SIMPLEX
+        id = 0
         for box in boxes:
-            boxid, _, b = box
+            _, _, b = box
             polygon = Polygon(b)
             int_coords = lambda x: np.array(x).round().astype(np.int32)
             exterior = [int_coords(polygon.exterior.coords)]
             # mask_stop_image = overlay(mask_stop_image, start_point, end_point, end_corner, start_corner, color=colors[boxid], alpha=0.3)
             tmp_copy = np.copy(mask_stop_image)
-            cv2.fillPoly(tmp_copy, exterior, color=colors[boxid])
+            cv2.fillPoly(tmp_copy, exterior, color=colors[id])
             mask_stop_image = cv2.addWeighted(mask_stop_image, 0.6, tmp_copy, 0.4, 0)
             center = polygon.centroid
-            mask_stop_image = cv2.putText(mask_stop_image,str(boxid+1),(int(center.x),int(center.y)), font, 0.5,(255,255,255),5,cv2.LINE_AA)
-        return mask_stop_image, len(box)
+            mask_stop_image = cv2.putText(mask_stop_image,str(id+1),(int(center.x),int(center.y)), font, 0.5,(255,255,255),5,cv2.LINE_AA)
+            id += 1
+        return mask_stop_image, len(boxes)
 
 
