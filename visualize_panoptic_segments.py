@@ -6,25 +6,74 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 import json
 from scipy import ndimage
 
-stuff_classes=['road',
-'sidewalk',
-'building',
-'wall',
-'fence',
-'pole',
-'traffic light',
-'traffic sign',
-'vegetation',
-'terrain',
-'sky',
-'person',
-'rider',
-'car',
-'truck',
-'bus',
-'train',
-'motorcycle',
-'bicycle']
+stuff_classes=[
+"Bird", # need not be considered
+"Ground Animal", # need not be considered
+"Curb",
+"Fence",
+"Guard Rail",
+"Barrier",
+"Wall",
+"Bike Lane",
+"Crosswalk - Plain",
+"Curb Cut", # need not be considered
+"Parking",
+"Pedestrian Area",
+"Rail Track",# need not be considered
+"Road",
+"Service Lane",# need not be considered
+"Sidewalk",
+"Bridge",# need not be considered
+"Building",# need not be considered
+"Tunnel",# need not be considered
+"Person",
+"Bicyclist",
+"Motorcyclist",
+"Other Rider",
+"Lane Marking - Crosswalk",
+"Lane Marking - General",
+"Mountain",# need not be considered
+"Sand",# need not be considered
+"Sky",# need not be considered
+"Snow",# need not be considered
+"Terrain",# need not be considered
+"Vegetation",
+"Water",# need not be considered
+"Banner",
+"Bench",
+"Bike Rack",
+"Billboard",# need not be considered
+"Catch Basin",# need not be considered
+"CCTV Camera",# need not be considered
+"Fire Hydrant",
+"Junction Box",
+"Mailbox",
+"Manhole",
+"Phone Booth",
+"Pothole",
+"Street Light",
+"Pole",
+"Traffic Sign Frame",
+"Utility Pole",
+"Traffic Light",
+"Traffic Sign (Back)",
+"Traffic Sign (Front)",
+"Trash Can",
+"Bicycle",
+"Boat",
+"Bus",
+"Car",
+"Caravan",
+"Motorcycle",
+"On Rails",# need not be considered
+"Other Vehicle",
+"Trailer",
+"Truck",
+"Wheeled Slow",# need not be considered
+"Car Mount",# need not be considered
+"Ego Vehicle",
+"Stop Positions"
+]
 
 _COLORS = []
 
@@ -69,8 +118,8 @@ def overlay(image, mask, color, alpha, resize=None):
 
     return image_combined
 
-image_mask = np.load("processed_panoptic/clip_8/panoptic_inference/22_panoptic_updated.npy")
-img = cv2.imread('sample_data_sg/clip_8/22_without_bb.png')
+image_mask = np.load("scene_graph_batch-2/panoptic_scene_graph_batch_2/clip_2/000480_panoptic_updated.npy")
+img = cv2.imread('dataset/images_anonymized/clip_2/images/000480.png')
 
 image_with_masks = np.copy(img)
 for i in range(1,np.max(image_with_masks)):
@@ -79,25 +128,28 @@ for i in range(1,np.max(image_with_masks)):
 # cv2.imwrite('scene_graph_explanation.png', image_with_masks)
 
 # img = cv2.imread('scene_graph_explanation.png')
-with open("processed_panoptic/clip_8/panoptic_inference/22_panoptic_segments_updated.json", 'r') as f:
+with open("scene_graph_batch-2/panoptic_scene_graph_batch_2/clip_2/000480_panoptic_segments_updated.json", 'r') as f:
     segments_info = json.load(f)
 
 for segment in segments_info:
     binary_mask = np.where(image_mask == segment["id"], 1, 0)
     text = stuff_classes[segment["category_id"]] + "_" + str(segment["id"])
-    
-    # draw text on the largest component
-    lw, num = measurements.label(binary_mask)
-    unique, counts = np.unique(lw, return_counts=True)
-    sorted_unique = [x for _, x in sorted(zip(counts, unique))]
-    max_cluster = sorted_unique[-2]
-    lw[lw != max_cluster] = 0 
-    x, y = ndimage.center_of_mass(lw)
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    try:
-        cv2.putText(image_with_masks,text,(int(y),int(x)), font, 0.5,(255,255,255),2,cv2.LINE_AA)
-    except:
+    if np.max(binary_mask) == 0:
         continue
+    else:
+        # draw text on the largest component
+        lw, num = measurements.label(binary_mask)
+        unique, counts = np.unique(lw, return_counts=True)
+        sorted_unique = [x for _, x in sorted(zip(counts, unique))]
+        sorted_unique_check = [[x,count] for count, x in sorted(zip(counts, unique))]
+        try:
+            max_cluster = sorted_unique[-2]
+        except:
+            max_cluster = sorted_unique[-1]
+        lw[lw != max_cluster] = 0 
+        x, y = ndimage.center_of_mass(lw)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(image_with_masks,text,(int(y),int(x)), font, 0.5,(255,255,255),2,cv2.LINE_AA)
 
 cv2.imwrite('scene_graph_explanation_with_labels.png', image_with_masks)
 
