@@ -340,7 +340,7 @@ class Scene():
             cv2.fillPoly(tmp_copy, exterior, color=colors[id])
             mask_stop_image = cv2.addWeighted(mask_stop_image, 0.6, tmp_copy, 0.4, 0)
             center = polygon.centroid
-            mask_stop_image = cv2.putText(mask_stop_image,str(id+1),(int(center.x),int(center.y)), font, 0.5,(255,255,255),5,cv2.LINE_AA)
+            mask_stop_image = cv2.putText(mask_stop_image,str(id+1),(int(center.x),int(center.y)), font, 3,(255,255,255),5,cv2.LINE_AA)
             id += 1
         return mask_stop_image, len(boxes)
 
