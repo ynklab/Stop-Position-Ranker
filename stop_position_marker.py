@@ -369,9 +369,9 @@ if __name__ == "__main__":
             os.mkdir(os.path.join(output_folder, f"clip_{clip}"))
         except Exception as e:
             print(f"An error occurred: {e}")
-        image = os.path.join(images, f"clip_{clip}/{frame}_without_bb.png")
-        depth = os.path.join(depths, f"clip_{clip}/{frame}_without_bb_disp.npy")
-        segmentation = os.path.join(seg, f"clip_{clip}/semantic_inference/{frame}_semantic.npy")
+        image = os.path.join(images, f"clip_{clip}/{frame}.png")
+        depth = os.path.join(depths, f"clip_{clip}/{frame}_disp.npy")
+        segmentation = os.path.join(seg, f"clip_{clip}/{frame}_semantic.npy")
         scene = Scene(image, depth, segmentation)
         image, num = scene.process_image()
         num_boxes[num] += 1
